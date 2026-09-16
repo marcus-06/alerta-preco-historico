@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Histórico de Preço</title>
+<style>
+  :root {
+    --bg: #f7f7f8;
+    --card: #ffffff;
+    --text: #1a1a1a;
+    --muted: #6b6b6b;
+    --border: #e5e5e5;
+    --accent: #2ecc71;
+    --accent-down: #2ecc71;
+    --accent-up: #e74c3c;
+    color-scheme: light dark;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16171a;
+      --card: #1f2023;
+      --text: #f0f0f0;
+      --muted: #9a9a9a;
+      --border: #303136;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16171a;
+    --card: #1f2023;
+    --text: #f0f0f0;
+    --muted: #9a9a9a;
+    --border: #303136;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 20px 16px 32px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .stat {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    text-align: center;
+  }
+  .stat .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat .value { font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
+  .chart-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .chart-wrap { position: relative; height: 280px; }
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filters button {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .filters button[aria-pressed="true"] {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+  .empty, .error { color: var(--muted); text-align: center; padding: 40px 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  .table-wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <h1 id="title">Carregando…</h1>
+  <div class="subtitle" id="subtitle"></div>
+
+  <div id="content" hidden>
+    <div class="stats">
+      <div class="stat"><div class="label">Atual</div><div class="value" id="stat-current">—</div></div>
+      <div class="stat"><div class="label">Mínimo</div><div class="value" id="stat-min">—</div></div>
+      <div class="stat"><div class="label">Máximo</div><div class="value" id="stat-max">—</div></div>
+    </div>
+
+    <div class="filters" id="filters">
+      <button data-days="7">7 dias</button>
+      <button data-days="30">30 dias</button>
+      <button data-days="90">90 dias</button>
+      <button data-days="0">Tudo</button>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </div>
+
+    <div class="chart-card table-wrap">
+      <table>
+        <thead><tr><th>Data</th><th>Preço</th><th>Disponibilidade</th></tr></thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="empty" id="empty" hidden>Nenhum histórico encontrado para este produto ainda.</div>
+  <div class="error" id="error" hidden></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script>
+(function () {
+  var SUPABASE_URL = "https://bvdcvzfhgfbcbenxqyrk.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_cCAEP4A0Qo9pwarFH6gn2w_rwDEZIrS";
+
+  var params = new URLSearchParams(location.search);
+  var slug = params.get("slug");
+
+  var titleEl = document.getElementById("title");
+  var subtitleEl = document.getElementById("subtitle");
+  var contentEl = document.getElementById("content");
+  var emptyEl = document.getElementById("empty");
+  var errorEl = document.getElementById("error");
+
+  function showError(msg) {
+    titleEl.textContent = "Histórico de Preço";
+    errorEl.textContent = msg;
+    errorEl.hidden = false;
+  }
+
+  if (!slug) {
+    showError("Nenhum produto informado (parâmetro ?slug= ausente na URL).");
+    return;
+  }
+
+  function formatPrice(v) {
+    if (v === null || v === undefined) return "—";
+    return "R$ " + Number(v).toFixed(2).replace(".", ",");
+  }
+
+  function formatDate(iso) {
+    var d = new Date(iso);
+    return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  var allRows = [];
+  var chart = null;
+
+  function render(days) {
+    var rows = allRows;
+    if (days > 0) {
+      var cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      rows = allRows.filter(function (r) { return new Date(r.collected_at).getTime() >= cutoff; });
+    }
+    if (rows.length === 0) rows = allRows.slice(-1);
+
+    var prices = rows.map(function (r) { return Number(r.price); });
+    var current = prices[prices.length - 1];
+    var min = Math.min.apply(null, prices);
+    var max = Math.max.apply(null, prices);
+
+    document.getElementById("stat-current").textContent = formatPrice(current);
+    document.getElementById("stat-min").textContent = formatPrice(min);
+    document.getElementById("stat-max").textContent = formatPrice(max);
+
+    var labels = rows.map(function (r) { return formatDate(r.collected_at); });
+
+    if (chart) chart.destroy();
+    var ctx = document.getElementById("chart").getContext("2d");
+    var textColor = getComputedStyle(document.documentElement).getPropertyValue("--text");
+    var mutedColor = getComputedStyle(document.documentElement).getPropertyValue("--muted");
+    var borderColor = getComputedStyle(document.documentElement).getPropertyValue("--border");
+
+    chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Preço (R$)",
+          data: prices,
+          borderColor: "#3b82f6",
+          backgroundColor: "rgba(59,130,246,0.12)",
+          fill: true,
+          tension: 0.25,
+          pointRadius: rows.length > 40 ? 0 : 3,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: mutedColor, maxRotation: 0, autoSkip: true }, grid: { color: borderColor } },
+          y: { ticks: { color: mutedColor }, grid: { color: borderColor } },
+        },
+      },
+    });
+
+    var tbody = document.getElementById("table-body");
+    tbody.innerHTML = "";
+    rows.slice().reverse().forEach(function (r) {
+      var tr = document.createElement("tr");
+      var avail = r.availability === "available" ? "Disponível" : "Fora de estoque";
+      tr.innerHTML =
+        "<td>" + formatDate(r.collected_at) + "</td>" +
+        "<td>" + formatPrice(r.price) + "</td>" +
+        "<td>" + avail + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById("filters").addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (!btn) return;
+    Array.prototype.forEach.call(
+      document.querySelectorAll("#filters button"),
+      function (b) { b.setAttribute("aria-pressed", String(b === btn)); }
+    );
+    render(Number(btn.dataset.days));
+  });
+
+  var url = SUPABASE_URL + "/rest/v1/price_history"
+    + "?slug=eq." + encodeURIComponent(slug)
+    + "&select=price,availability,collected_at,label"
+    + "&order=collected_at.asc";
+
+  fetch(url, {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: "Bearer " + SUPABASE_KEY,
+    },
+  })
+    .then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    })
+    .then(function (rows) {
+      if (!rows.length) {
+        titleEl.textContent = "Histórico de Preço";
+        emptyEl.hidden = false;
+        return;
+      }
+      allRows = rows;
+      var label = rows[rows.length - 1].label || slug;
+      titleEl.textContent = label;
+      subtitleEl.textContent = rows.length + " leituras registradas";
+      contentEl.hidden = false;
+      document.querySelector('#filters button[data-days="30"]').setAttribute("aria-pressed", "true");
+      render(30);
+    })
+    .catch(function (err) {
+      showError("Erro ao carregar histórico: " + err.message);
+    });
+})();
+</script>
+</body>
+</html>
