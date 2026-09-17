@@ -47,9 +47,12 @@
   .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
   .stats {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 10px;
     margin-bottom: 20px;
+  }
+  @media (max-width: 420px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
   }
   .stat {
     background: var(--card);
@@ -60,6 +63,8 @@
   }
   .stat .label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
   .stat .value { font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
+  .stat .value.up { color: var(--accent-up); }
+  .stat .value.down { color: var(--accent-down); }
   .chart-card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -98,6 +103,7 @@
   <div id="content" hidden>
     <div class="stats">
       <div class="stat"><div class="label">Atual</div><div class="value" id="stat-current">—</div></div>
+      <div class="stat"><div class="label">Variação</div><div class="value" id="stat-change">—</div></div>
       <div class="stat"><div class="label">Mínimo</div><div class="value" id="stat-min">—</div></div>
       <div class="stat"><div class="label">Máximo</div><div class="value" id="stat-max">—</div></div>
     </div>
@@ -109,7 +115,7 @@
       <button data-days="0">Tudo</button>
     </div>
 
-    <div class="chart-card">
+    <div class="chart-card" id="chart-card" hidden>
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
     </div>
 
@@ -125,11 +131,32 @@
   <div class="error" id="error" hidden></div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script>
 (function () {
   var SUPABASE_URL = "https://bvdcvzfhgfbcbenxqyrk.supabase.co";
   var SUPABASE_KEY = "sb_publishable_cCAEP4A0Qo9pwarFH6gn2w_rwDEZIrS";
+  var CHART_CDNS = [
+    "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js",
+  ];
+
+  var chartReady = false;
+  var lastDays = 30;
+
+  function loadChart(cdns, cb) {
+    if (!cdns.length) { cb(false); return; }
+    var s = document.createElement("script");
+    s.src = cdns[0];
+    s.onload = function () { cb(true); };
+    s.onerror = function () { loadChart(cdns.slice(1), cb); };
+    document.head.appendChild(s);
+  }
+
+  loadChart(CHART_CDNS.slice(), function (ok) {
+    chartReady = ok;
+    document.getElementById("chart-card").hidden = !ok;
+    if (allRows.length) render(lastDays);
+  });
 
   var params = new URLSearchParams(location.search);
   var slug = params.get("slug");
@@ -165,6 +192,7 @@
   var chart = null;
 
   function render(days) {
+    lastDays = days;
     var rows = allRows;
     if (days > 0) {
       var cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -173,6 +201,7 @@
     if (rows.length === 0) rows = allRows.slice(-1);
 
     var prices = rows.map(function (r) { return Number(r.price); });
+    var first = prices[0];
     var current = prices[prices.length - 1];
     var min = Math.min.apply(null, prices);
     var max = Math.max.apply(null, prices);
@@ -181,7 +210,30 @@
     document.getElementById("stat-min").textContent = formatPrice(min);
     document.getElementById("stat-max").textContent = formatPrice(max);
 
+    var changeEl = document.getElementById("stat-change");
+    changeEl.classList.remove("up", "down");
+    if (prices.length < 2 || first === 0) {
+      changeEl.textContent = "—";
+    } else {
+      var pct = ((current - first) / first) * 100;
+      var pctText = Math.abs(pct).toFixed(1).replace(".", ",") + "%";
+      if (pct < 0) {
+        changeEl.textContent = "↓ " + pctText;
+        changeEl.classList.add("down");
+      } else if (pct > 0) {
+        changeEl.textContent = "↑ " + pctText;
+        changeEl.classList.add("up");
+      } else {
+        changeEl.textContent = "→ 0,0%";
+      }
+    }
+
     var labels = rows.map(function (r) { return formatDate(r.collected_at); });
+
+    if (!chartReady) {
+      renderTable(rows);
+      return;
+    }
 
     if (chart) chart.destroy();
     var ctx = document.getElementById("chart").getContext("2d");
@@ -214,6 +266,10 @@
       },
     });
 
+    renderTable(rows);
+  }
+
+  function renderTable(rows) {
     var tbody = document.getElementById("table-body");
     tbody.innerHTML = "";
     rows.slice().reverse().forEach(function (r) {
