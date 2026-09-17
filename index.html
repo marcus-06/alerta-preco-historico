@@ -93,6 +93,25 @@
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 500; }
   .table-wrap { overflow-x: auto; }
+  #dashboard tbody tr { cursor: pointer; }
+  #dashboard tbody tr:hover { background: var(--bg); }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .badge.ok { background: rgba(46,204,113,0.15); color: var(--accent-down); }
+  .badge.no { background: rgba(231,76,60,0.15); color: var(--accent-up); }
+  .back-link {
+    display: inline-block;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+  }
+  .back-link:hover { color: var(--text); }
 </style>
 </head>
 <body>
@@ -100,7 +119,25 @@
   <h1 id="title">Carregando…</h1>
   <div class="subtitle" id="subtitle"></div>
 
+  <div id="dashboard" hidden>
+    <div class="chart-card table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Produto</th>
+            <th>Estoque</th>
+            <th>Adicionado</th>
+            <th>Último report</th>
+            <th>Reports</th>
+          </tr>
+        </thead>
+        <tbody id="dashboard-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div id="content" hidden>
+    <a href="?" class="back-link">← Todos os produtos</a>
     <div class="stats">
       <div class="stat"><div class="label">Atual</div><div class="value" id="stat-current">—</div></div>
       <div class="stat"><div class="label">Variação</div><div class="value" id="stat-change">—</div></div>
@@ -152,17 +189,12 @@
     document.head.appendChild(s);
   }
 
-  loadChart(CHART_CDNS.slice(), function (ok) {
-    chartReady = ok;
-    document.getElementById("chart-card").hidden = !ok;
-    if (allRows.length) render(lastDays);
-  });
-
   var params = new URLSearchParams(location.search);
   var slug = params.get("slug");
 
   var titleEl = document.getElementById("title");
   var subtitleEl = document.getElementById("subtitle");
+  var dashboardEl = document.getElementById("dashboard");
   var contentEl = document.getElementById("content");
   var emptyEl = document.getElementById("empty");
   var errorEl = document.getElementById("error");
@@ -171,11 +203,6 @@
     titleEl.textContent = "Histórico de Preço";
     errorEl.textContent = msg;
     errorEl.hidden = false;
-  }
-
-  if (!slug) {
-    showError("Nenhum produto informado (parâmetro ?slug= ausente na URL).");
-    return;
   }
 
   function formatPrice(v) {
@@ -187,6 +214,100 @@
     var d = new Date(iso);
     return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   }
+
+  function formatDateOnly(iso) {
+    return new Date(iso).toLocaleDateString("pt-BR");
+  }
+
+  if (slug) {
+    loadChart(CHART_CDNS.slice(), function (ok) {
+      chartReady = ok;
+      document.getElementById("chart-card").hidden = !ok;
+      if (allRows.length) render(lastDays);
+    });
+  } else {
+    renderDashboard();
+  }
+
+  function renderDashboard() {
+    titleEl.textContent = "Produtos Monitorados";
+
+    var url = SUPABASE_URL + "/rest/v1/price_history"
+      + "?select=slug,label,availability,collected_at"
+      + "&order=slug.asc,collected_at.asc";
+
+    fetch(url, {
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: "Bearer " + SUPABASE_KEY,
+      },
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rows) {
+        if (!rows.length) {
+          subtitleEl.textContent = "";
+          emptyEl.textContent = "Nenhum histórico encontrado ainda.";
+          emptyEl.hidden = false;
+          return;
+        }
+
+        var bySlug = {};
+        var order = [];
+        rows.forEach(function (r) {
+          if (!bySlug[r.slug]) {
+            bySlug[r.slug] = {
+              slug: r.slug,
+              label: r.label || r.slug,
+              first: r.collected_at,
+              last: r.collected_at,
+              availability: r.availability,
+              count: 0,
+            };
+            order.push(r.slug);
+          }
+          var p = bySlug[r.slug];
+          p.count += 1;
+          if (r.collected_at < p.first) p.first = r.collected_at;
+          if (r.collected_at >= p.last) {
+            p.last = r.collected_at;
+            p.availability = r.availability;
+          }
+          if (r.label) p.label = r.label;
+        });
+
+        var products = order.map(function (s) { return bySlug[s]; });
+        products.sort(function (a, b) { return a.label.localeCompare(b.label, "pt-BR"); });
+
+        subtitleEl.textContent = products.length + " produto(s) monitorado(s)";
+
+        var tbody = document.getElementById("dashboard-body");
+        tbody.innerHTML = "";
+        products.forEach(function (p) {
+          var available = p.availability === "available";
+          var tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td>" + p.label + "</td>" +
+            "<td><span class=\"badge " + (available ? "ok" : "no") + "\">" + (available ? "Disponível" : "Indisponível") + "</span></td>" +
+            "<td>" + formatDateOnly(p.first) + "</td>" +
+            "<td>" + formatDate(p.last) + "</td>" +
+            "<td>" + p.count + "</td>";
+          tr.addEventListener("click", function () {
+            location.href = "?slug=" + encodeURIComponent(p.slug);
+          });
+          tbody.appendChild(tr);
+        });
+
+        dashboardEl.hidden = false;
+      })
+      .catch(function (err) {
+        showError("Erro ao carregar produtos: " + err.message);
+      });
+  }
+
+  if (!slug) return;
 
   var allRows = [];
   var chart = null;
