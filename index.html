@@ -128,6 +128,7 @@
             <th>Estoque</th>
             <th>Adicionado</th>
             <th>Último report</th>
+            <th>Último preço</th>
             <th>Reports</th>
           </tr>
         </thead>
@@ -233,7 +234,7 @@
     titleEl.textContent = "Produtos Monitorados";
 
     var url = SUPABASE_URL + "/rest/v1/price_history"
-      + "?select=slug,label,availability,collected_at"
+      + "?select=slug,label,availability,collected_at,price"
       + "&order=slug.asc,collected_at.asc";
 
     fetch(url, {
@@ -264,6 +265,7 @@
               first: r.collected_at,
               last: r.collected_at,
               availability: r.availability,
+              lastPrice: r.price,
               count: 0,
             };
             order.push(r.slug);
@@ -274,6 +276,7 @@
           if (r.collected_at >= p.last) {
             p.last = r.collected_at;
             p.availability = r.availability;
+            p.lastPrice = r.price;
           }
           if (r.label) p.label = r.label;
         });
@@ -293,6 +296,7 @@
             "<td><span class=\"badge " + (available ? "ok" : "no") + "\">" + (available ? "Disponível" : "Indisponível") + "</span></td>" +
             "<td>" + formatDateOnly(p.first) + "</td>" +
             "<td>" + formatDate(p.last) + "</td>" +
+            "<td>" + formatPrice(p.lastPrice) + "</td>" +
             "<td>" + p.count + "</td>";
           tr.addEventListener("click", function () {
             location.href = "?slug=" + encodeURIComponent(p.slug);
